@@ -365,6 +365,7 @@ def build_decision_packet(
 
     return packet
 
+
 def cmd_run(
     scenarios_path: Path,
     gate_path: Path,
@@ -604,6 +605,100 @@ def cmd_pack(run_id: str, out_root: Path) -> None:
     print(f"   - packets indexed: {len(packet_files)}")
 
 
+def cmd_verify_bundle(run_id: str, out_root: Path) -> None:
+    packets_dir = out_root / "packets" / run_id
+
+    # Support new + older filename
+    bundle_path = packets_dir / "bundle.json"
+    if not bundle_path.exists():
+        legacy = packets_dir / "packet_bundle.json"
+        if legacy.exists():
+            bundle_path = legacy
+        else:
+            raise SystemExit(
+                f"❌ Bundle not found: {bundle_path} (or packet_bundle.json)")
+
+    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+
+    # Run summary can be embedded or referenced; we use embedded if present
+    run_summary = bundle.get("run_summary")
+    if not isinstance(run_summary, dict):
+        raise SystemExit("❌ Bundle missing run_summary")
+
+    errors: list[str] = []
+
+    # 1) Verify run_id consistency
+    if bundle.get("run_id") != run_id:
+        errors.append(
+            f"run_id mismatch: bundle has {bundle.get('run_id')} expected {run_id}")
+    if run_summary.get("run_id") != run_id:
+        errors.append(
+            f"run_summary.run_id mismatch: {run_summary.get('run_id')} expected {run_id}")
+
+    # 2) Verify input hashes (scenario pack + configs)
+    sha_section = run_summary.get("sha256", {})
+    paths_section = run_summary.get("paths", {})
+
+    def verify_input(name: str, path_key: str, sha_key: str):
+        expected = sha_section.get(sha_key)
+        rel_path = paths_section.get(path_key)
+        if expected is None or rel_path is None:
+            errors.append(
+                f"missing bundle fields for {name}: paths.{path_key} or sha256.{sha_key}")
+            return
+
+        p = Path(rel_path)
+        if not p.exists():
+            errors.append(f"{name} path not found: {rel_path}")
+            return
+
+        actual = sha256_file(p)
+        if actual != expected:
+            errors.append(
+                f"{name} sha256 mismatch: expected {expected} actual {actual}")
+
+    verify_input("scenario_pack", "scenarios_path", "scenario_pack")
+    verify_input("gate_config", "gate_config_path", "gate_config")
+    verify_input("permission_sets", "permission_sets_path", "permission_sets")
+
+    # 3) Verify each packet hash from packet_index
+    packet_index = bundle.get("packet_index", [])
+    if not isinstance(packet_index, list) or not packet_index:
+        errors.append("bundle missing packet_index (or it is empty)")
+
+    for item in packet_index:
+        if not isinstance(item, dict):
+            errors.append("packet_index contains a non-object item")
+            continue
+
+        fname = item.get("file")
+        expected = item.get("sha256")
+        if not fname or not expected:
+            errors.append(f"packet_index item missing file/sha256: {item}")
+            continue
+
+        pf = packets_dir / fname
+        if not pf.exists():
+            errors.append(f"packet file missing: {pf}")
+            continue
+
+        actual = sha256_file(pf)
+        if actual != expected:
+            errors.append(
+                f"{fname} sha256 mismatch: expected {expected} actual {actual}")
+
+    if errors:
+        print("❌ VERIFY FAIL")
+        for e in errors:
+            print(f"   - {e}")
+        raise SystemExit(1)
+
+    print("✅ VERIFY PASS")
+    print(f"   - bundle: {bundle_path}")
+    print(f"   - run_id: {run_id}")
+    print(f"   - packets verified: {len(packet_index)}")
+
+
 def cmd_hello(out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "hello.txt").write_text(
@@ -639,6 +734,10 @@ def main():
     p_test.add_argument("--gate", default="configs/gate_config.yaml")
     p_test.add_argument("--perms", default="configs/permission_sets.yaml")
     p_test.add_argument("--permission-set", default="PS_CONTROLLERS_DEFAULT")
+    p_verify = sub.add_parser("verify-bundle", help="Recompute hashes and verify bundle integrity")
+    p_verify.add_argument("--run-id", required=True)
+    p_verify.add_argument("--out", default="out")
+
 
     p_pack = sub.add_parser(
         "pack", help="Bundle packets + hashes for a run_id into one audit artifact")
@@ -669,6 +768,9 @@ def main():
     elif args.cmd == "pack":
         cmd_pack(args.run_id, Path(args.out))
 
+    elif args.cmd == "verify-bundle":
+        cmd_verify_bundle(args.run_id, Path(args.out))
 
 if __name__ == "__main__":
     main()
+    
