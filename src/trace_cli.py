@@ -543,7 +543,7 @@ def cmd_pack(run_id: str, out_root: Path) -> None:
     if not summary_path.exists():
         raise SystemExit(f"❌ Run summary not found: {summary_path}")
 
-    packet_files = sorted(packets_dir.glob("packet_*.json"))
+    packet_files = [p for p in sorted(packets_dir.glob("packet_*.json")) if p.name != "packet_bundle.json"]
     if not packet_files:
         raise SystemExit(f"❌ No packet_*.json files found in: {packets_dir}")
 
@@ -567,7 +567,7 @@ def cmd_pack(run_id: str, out_root: Path) -> None:
         "packet_index": packet_index,
     }
 
-    bundle_path = packets_dir / "packet_bundle.json"
+    bundle_path = packets_dir / "bundle.json"
     bundle_path.write_text(json.dumps(bundle, indent=2), encoding="utf-8")
 
     print("✅ Pack complete")
