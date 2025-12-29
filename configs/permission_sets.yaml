@@ -1,6 +1,8 @@
-﻿version: 0.1
+version: 0.2
 sets:
-  - id: PS_DEFAULT
-    name: Default permissions (demo)
+  - id: PS_CONTROLLERS_DEFAULT
+    name: Controllers default (paper demo)
     allowed_gates:
-      - GATE_HELLO
+      - G1_MISSING_EVIDENCE
+      - G2_POLICY_CONFLICT
+      - G3_TIER1_SAFE

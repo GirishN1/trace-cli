@@ -1,6 +1,18 @@
-﻿version: 0.1
+﻿policy_version: PV-2025-01
 gates:
-  - id: GATE_HELLO
-    name: Hello gate (demo)
-    level: pass
-    description: Always passes; used to test plumbing.
+  - id: G1_MISSING_EVIDENCE
+    if: evidence.count < 3
+    outcome: ESCALATE
+    reason_code: RC_MISSING_EVIDENCE
+    required_questions:
+      - "Which evidence is missing and why?"
+
+  - id: G2_POLICY_CONFLICT
+    if: policy.conflict_detected == true
+    outcome: HARD_STOP
+    reason_code: RC_POLICY_CONFLICT
+
+  - id: G3_TIER1_SAFE
+    if: tier == "T1" and evidence.complete == true
+    outcome: PASS
+    reason_code: RC_PASS_T1
