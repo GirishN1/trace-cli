@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trace-cli"
+version = "0.1.0"
+description = "TRACE reference CLI (demo)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["PyYAML>=6.0"]
+
+[project.scripts]
+trace = "trace_cli:main"
+trace-cli = "trace_cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+py-modules = ["trace_cli"]
