@@ -1,1 +1,2 @@
-﻿{"id":"scn_0001","title":"Placeholder scenario","notes":"Replace with real scenario pack later."}
+﻿{"id":"scn_0001","title":"Demo scenario A","text":"User asks for a simple hello check."}
+{"id":"scn_0002","title":"Demo scenario B","text":"User asks for validation of config files."}

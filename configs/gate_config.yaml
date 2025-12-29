@@ -1,2 +1,6 @@
-﻿# gate_config.yaml
-# TODO: add gates/rules here later
+﻿version: 0.1
+gates:
+  - id: GATE_HELLO
+    name: Hello gate (demo)
+    level: pass
+    description: Always passes; used to test plumbing.

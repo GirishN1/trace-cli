@@ -1,2 +1,6 @@
-﻿# permission_sets.yaml
-# TODO: add permission sets here later
+﻿version: 0.1
+sets:
+  - id: PS_DEFAULT
+    name: Default permissions (demo)
+    allowed_gates:
+      - GATE_HELLO
