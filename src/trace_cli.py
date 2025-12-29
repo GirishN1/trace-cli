@@ -32,7 +32,7 @@ def read_jsonl(path: Path) -> list[dict]:
     except FileNotFoundError:
         raise SystemExit(f"❌ JSONL not found: {path}")
 
-    records = []
+    records: list[dict] = []
     for i, line in enumerate(lines, start=1):
         line = line.strip()
         if not line:
@@ -60,7 +60,9 @@ def validate_permission_sets(cfg: dict) -> None:
             if k not in s:
                 raise SystemExit(f"❌ permission_sets.yaml set #{idx} missing '{k}'")
         if not isinstance(s["allowed_gates"], list):
-            raise SystemExit(f"❌ permission_sets.yaml set #{idx} allowed_gates must be a list")
+            raise SystemExit(
+                f"❌ permission_sets.yaml set #{idx} allowed_gates must be a list"
+            )
 
 
 def detect_gate_schema(gate_cfg: dict) -> str:
@@ -77,7 +79,9 @@ def detect_gate_schema(gate_cfg: dict) -> str:
 
 def validate_gate_config_paper(cfg: dict) -> None:
     if "policy_version" not in cfg:
-        raise SystemExit("❌ gate_config.yaml (paper schema) must include: policy_version")
+        raise SystemExit(
+            "❌ gate_config.yaml (paper schema) must include: policy_version"
+        )
     if "gates" not in cfg or not isinstance(cfg["gates"], list):
         raise SystemExit("❌ gate_config.yaml (paper schema) must include: gates: [ ... ]")
 
@@ -88,7 +92,9 @@ def validate_gate_config_paper(cfg: dict) -> None:
             if k not in g:
                 raise SystemExit(f"❌ gate_config.yaml gate #{idx} missing '{k}'")
         if g["outcome"] not in ("PASS", "ESCALATE", "HARD_STOP"):
-            raise SystemExit(f"❌ gate_config.yaml gate #{idx} outcome must be PASS|ESCALATE|HARD_STOP")
+            raise SystemExit(
+                f"❌ gate_config.yaml gate #{idx} outcome must be PASS|ESCALATE|HARD_STOP"
+            )
 
 
 def validate_gate_config_legacy(cfg: dict) -> None:
@@ -115,18 +121,19 @@ def make_getter(ctx: dict):
             else:
                 return None
         return cur
+
     return get
 
 
 _DOTTED = re.compile(r"\b[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)+\b")
 
-
 def eval_paper_if(expr: str, ctx: dict) -> bool:
-    # Convert paper-style to safe Python eval:
-    # - true/false -> True/False
-    # - evidence.count -> get("evidence.count")
-    # - allow and/or/not, ==, !=, <, <=, >, >=, parentheses, numbers, strings
-    expr2 = expr.replace(" true", " True").replace(" false", " False").replace("true", "True").replace("false", "False")
+    expr2 = (
+        expr.replace(" true", " True")
+        .replace(" false", " False")
+        .replace("true", "True")
+        .replace("false", "False")
+    )
 
     def repl(m):
         return f'get("{m.group(0)}")'
@@ -134,8 +141,15 @@ def eval_paper_if(expr: str, ctx: dict) -> bool:
     expr2 = _DOTTED.sub(repl, expr2)
 
     get = make_getter(ctx)
+
+    # ✅ allow simple top-level variables like: tier
+    locals_env = {"get": get}
+    for k, v in ctx.items():
+        if re.match(r"^[A-Za-z_]\w*$", str(k)):
+            locals_env[str(k)] = v
+
     try:
-        return bool(eval(expr2, {"__builtins__": {}}, {"get": get}))
+        return bool(eval(expr2, {"__builtins__": {}}, locals_env))
     except Exception:
         return False
 
@@ -156,7 +170,7 @@ def cmd_validate(gate_path: Path, perms_path: Path) -> None:
         gate_ids = {g["id"] for g in gate_cfg["gates"]}
         policy_version = str(gate_cfg.get("version"))
     else:
-        raise SystemExit("❌ gate_config.yaml schema not recognized (expected paper or legacy format)")
+        raise SystemExit("❌ gate_config.yaml schema not recognized (paper or legacy)")
 
     for s in perms_cfg["sets"]:
         for gid in s["allowed_gates"]:
@@ -183,7 +197,58 @@ def overall_outcome(outcomes: list[str]) -> str:
     return max(outcomes, key=lambda x: SEVERITY.get(x, 0))
 
 
-def cmd_run(scenarios_path: Path, gate_path: Path, perms_path: Path, permission_set_id: str, out_root: Path) -> None:
+def evaluate_scenario_paper(scn: dict, gate_cfg: dict, allowed_gate_ids: set[str]) -> dict:
+    sid = scn.get("scenario_id") or scn.get("id") or "UNKNOWN"
+    tier = scn.get("tier")
+    inputs = scn.get("inputs", {})
+
+    ctx = {"tier": tier}
+    if isinstance(inputs, dict):
+        ctx.update(inputs)
+
+    gate_report = []
+    outcomes: list[str] = []
+    reason_codes: list[str] = []
+    required_questions: list[str] = []
+
+    for g in gate_cfg["gates"]:
+        if g["id"] not in allowed_gate_ids:
+            continue
+
+        matched = eval_paper_if(str(g["if"]), ctx)
+        if matched:
+            outcomes.append(g["outcome"])
+            reason_codes.append(g["reason_code"])
+            if isinstance(g.get("required_questions"), list):
+                required_questions.extend(g["required_questions"])
+
+        gate_report.append(
+            {
+                "gate_id": g["id"],
+                "matched": bool(matched),
+                "outcome": g["outcome"] if matched else None,
+                "reason_code": g["reason_code"] if matched else None,
+            }
+        )
+
+    final = overall_outcome(outcomes)
+
+    return {
+        "scenario_id": sid,
+        "final_outcome": final,
+        "reason_codes": reason_codes,
+        "required_questions": required_questions,
+        "gate_report": gate_report,
+    }
+
+
+def cmd_run(
+    scenarios_path: Path,
+    gate_path: Path,
+    perms_path: Path,
+    permission_set_id: str,
+    out_root: Path,
+) -> None:
     scenarios = read_jsonl(scenarios_path)
     if not scenarios:
         raise SystemExit("❌ No scenarios found in scenario pack.")
@@ -194,7 +259,7 @@ def cmd_run(scenarios_path: Path, gate_path: Path, perms_path: Path, permission_
 
     schema = detect_gate_schema(gate_cfg)
     if schema != "paper":
-        raise SystemExit("❌ This run implementation currently expects PAPER gate schema (policy_version/outcome/if).")
+        raise SystemExit("❌ This run expects PAPER gate schema (policy_version/outcome/if).")
 
     validate_gate_config_paper(gate_cfg)
 
@@ -212,36 +277,9 @@ def cmd_run(scenarios_path: Path, gate_path: Path, perms_path: Path, permission_
 
     for scn in scenarios:
         sid = scn.get("scenario_id") or scn.get("id") or f"row_{written+1}"
-        tier = scn.get("tier")
-        inputs = scn.get("inputs", {})
-        ctx = {"tier": tier}
-        if isinstance(inputs, dict):
-            # allow gates to reference evidence.*, policy.*, etc
-            ctx.update(inputs)
+        result = evaluate_scenario_paper(scn, gate_cfg, allowed)
 
-        gate_report = []
-        outcomes = []
-        reason_codes = []
-        required_questions = []
-
-        for g in gate_cfg["gates"]:
-            if g["id"] not in allowed:
-                continue
-            matched = eval_paper_if(str(g["if"]), ctx)
-            if matched:
-                outcomes.append(g["outcome"])
-                reason_codes.append(g["reason_code"])
-                if isinstance(g.get("required_questions"), list):
-                    required_questions.extend(g["required_questions"])
-            gate_report.append({
-                "gate_id": g["id"],
-                "matched": bool(matched),
-                "outcome": g["outcome"] if matched else None,
-                "reason_code": g["reason_code"] if matched else None,
-            })
-
-        final = overall_outcome(outcomes)
-        counts[final] += 1
+        counts[result["final_outcome"]] += 1
 
         packet = {
             "run_id": run_id,
@@ -249,15 +287,17 @@ def cmd_run(scenarios_path: Path, gate_path: Path, perms_path: Path, permission_
             "policy_version": gate_cfg["policy_version"],
             "permission_set_id": permission_set_id,
             "scenario": scn,
-            "gate_report": gate_report,
+            "gate_report": result["gate_report"],
             "decision": {
-                "final_outcome": final,
-                "reason_codes": reason_codes,
-                "required_questions": required_questions,
+                "final_outcome": result["final_outcome"],
+                "reason_codes": result["reason_codes"],
+                "required_questions": result["required_questions"],
             },
         }
 
-        (packets_dir / f"packet_{sid}.json").write_text(json.dumps(packet, indent=2), encoding="utf-8")
+        (packets_dir / f"packet_{sid}.json").write_text(
+            json.dumps(packet, indent=2), encoding="utf-8"
+        )
         written += 1
 
     summary = {
@@ -279,9 +319,88 @@ def cmd_run(scenarios_path: Path, gate_path: Path, perms_path: Path, permission_
     print(f"   - summary: {runs_dir / 'run_summary.json'}")
 
 
+def _norm_reason_codes(xs) -> set[str]:
+    if not xs:
+        return set()
+    if isinstance(xs, str):
+        return {xs}
+    if isinstance(xs, list):
+        return {str(x) for x in xs}
+    return {str(xs)}
+
+
+def cmd_test(
+    scenarios_path: Path,
+    gate_path: Path,
+    perms_path: Path,
+    permission_set_id: str,
+) -> None:
+    scenarios = read_jsonl(scenarios_path)
+    if not scenarios:
+        raise SystemExit("❌ No scenarios found in scenario pack.")
+
+    gate_cfg = read_yaml(gate_path)
+    perms_cfg = read_yaml(perms_path)
+    validate_permission_sets(perms_cfg)
+
+    schema = detect_gate_schema(gate_cfg)
+    if schema != "paper":
+        raise SystemExit("❌ trace test expects PAPER gate schema (policy_version/outcome/if).")
+    validate_gate_config_paper(gate_cfg)
+
+    ps = select_permission_set(perms_cfg, permission_set_id)
+    allowed = set(ps["allowed_gates"])
+
+    failures = []
+    passed = 0
+
+    for scn in scenarios:
+        sid = scn.get("scenario_id") or scn.get("id") or "UNKNOWN"
+        expected_gate = scn.get("expected_gate") or scn.get("expected_outcome")
+        expected_reasons = scn.get("expected_reason_codes") or scn.get("expected_reasons")
+
+        result = evaluate_scenario_paper(scn, gate_cfg, allowed)
+
+        ok = True
+        if expected_gate and result["final_outcome"] != expected_gate:
+            ok = False
+
+        if expected_reasons is not None:
+            exp_set = _norm_reason_codes(expected_reasons)
+            act_set = _norm_reason_codes(result["reason_codes"])
+            if exp_set != act_set:
+                ok = False
+
+        if ok:
+            passed += 1
+        else:
+            failures.append(
+                {
+                    "scenario_id": sid,
+                    "expected_gate": expected_gate,
+                    "actual_gate": result["final_outcome"],
+                    "expected_reason_codes": expected_reasons,
+                    "actual_reason_codes": result["reason_codes"],
+                }
+            )
+
+    total = len(scenarios)
+    if failures:
+        print(f"❌ TEST FAIL: {passed}/{total} passed; {len(failures)} failed")
+        for f in failures:
+            print(f"   - {f['scenario_id']}: expected={f['expected_gate']} actual={f['actual_gate']}")
+            if f["expected_reason_codes"] is not None:
+                print(f"     reasons expected={f['expected_reason_codes']} actual={f['actual_reason_codes']}")
+        raise SystemExit(1)
+
+    print(f"✅ TEST PASS: {passed}/{total} scenarios matched expected outputs")
+
+
 def cmd_hello(out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "hello.txt").write_text(f"TRACE CLI is working. UTC={utc_now_iso()}\n", encoding="utf-8")
+    (out_dir / "hello.txt").write_text(
+        f"TRACE CLI is working. UTC={utc_now_iso()}\n", encoding="utf-8"
+    )
     print("✅ TRACE CLI is working. Wrote out/hello.txt")
 
 
@@ -303,6 +422,12 @@ def main():
     p_run.add_argument("--permission-set", default="PS_CONTROLLERS_DEFAULT")
     p_run.add_argument("--out", default="out")
 
+    p_test = sub.add_parser("test", help="Regression test: compare actual outputs vs expected_* fields")
+    p_test.add_argument("--scenarios", default="scenarios/scenario_pack_v0.jsonl")
+    p_test.add_argument("--gate", default="configs/gate_config.yaml")
+    p_test.add_argument("--perms", default="configs/permission_sets.yaml")
+    p_test.add_argument("--permission-set", default="PS_CONTROLLERS_DEFAULT")
+
     args = parser.parse_args()
 
     if args.cmd == "hello":
@@ -310,7 +435,20 @@ def main():
     elif args.cmd == "validate":
         cmd_validate(Path(args.gate), Path(args.perms))
     elif args.cmd == "run":
-        cmd_run(Path(args.scenarios), Path(args.gate), Path(args.perms), args.permission_set, Path(args.out))
+        cmd_run(
+            Path(args.scenarios),
+            Path(args.gate),
+            Path(args.perms),
+            args.permission_set,
+            Path(args.out),
+        )
+    elif args.cmd == "test":
+        cmd_test(
+            Path(args.scenarios),
+            Path(args.gate),
+            Path(args.perms),
+            args.permission_set,
+        )
 
 
 if __name__ == "__main__":
