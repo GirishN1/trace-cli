@@ -64,10 +64,12 @@ def validate_permission_sets(cfg: dict) -> None:
 
     for idx, s in enumerate(cfg["sets"], start=1):
         if not isinstance(s, dict):
-            raise SystemExit(f"❌ permission_sets.yaml set #{idx} must be an object")
+            raise SystemExit(
+                f"❌ permission_sets.yaml set #{idx} must be an object")
         for k in ("id", "name", "allowed_gates"):
             if k not in s:
-                raise SystemExit(f"❌ permission_sets.yaml set #{idx} missing '{k}'")
+                raise SystemExit(
+                    f"❌ permission_sets.yaml set #{idx} missing '{k}'")
         if not isinstance(s["allowed_gates"], list):
             raise SystemExit(
                 f"❌ permission_sets.yaml set #{idx} allowed_gates must be a list"
@@ -92,14 +94,17 @@ def validate_gate_config_paper(cfg: dict) -> None:
             "❌ gate_config.yaml (paper schema) must include: policy_version"
         )
     if "gates" not in cfg or not isinstance(cfg["gates"], list):
-        raise SystemExit("❌ gate_config.yaml (paper schema) must include: gates: [ ... ]")
+        raise SystemExit(
+            "❌ gate_config.yaml (paper schema) must include: gates: [ ... ]")
 
     for idx, g in enumerate(cfg["gates"], start=1):
         if not isinstance(g, dict):
-            raise SystemExit(f"❌ gate_config.yaml gate #{idx} must be an object")
+            raise SystemExit(
+                f"❌ gate_config.yaml gate #{idx} must be an object")
         for k in ("id", "if", "outcome", "reason_code"):
             if k not in g:
-                raise SystemExit(f"❌ gate_config.yaml gate #{idx} missing '{k}'")
+                raise SystemExit(
+                    f"❌ gate_config.yaml gate #{idx} missing '{k}'")
         if g["outcome"] not in ("PASS", "ESCALATE", "HARD_STOP"):
             raise SystemExit(
                 f"❌ gate_config.yaml gate #{idx} outcome must be PASS|ESCALATE|HARD_STOP"
@@ -119,7 +124,8 @@ def make_getter(ctx: dict):
     return get
 
 
-_DOTTED = re.compile(r"\b[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)+\b")
+_DOTTED = re.compile(
+    r"\b[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)+\b")
 
 
 def eval_paper_if(expr: str, ctx: dict) -> bool:
@@ -161,12 +167,14 @@ def cmd_validate(gate_path: Path, perms_path: Path) -> None:
         gate_ids = {g["id"] for g in gate_cfg["gates"]}
         policy_version = gate_cfg["policy_version"]
     else:
-        raise SystemExit("❌ This CLI currently expects PAPER gate schema (policy_version/outcome/if).")
+        raise SystemExit(
+            "❌ This CLI currently expects PAPER gate schema (policy_version/outcome/if).")
 
     for s in perms_cfg["sets"]:
         for gid in s["allowed_gates"]:
             if gid not in gate_ids:
-                raise SystemExit(f"❌ permission_sets references unknown gate id: {gid}")
+                raise SystemExit(
+                    f"❌ permission_sets references unknown gate id: {gid}")
 
     print("✅ Config validation passed:")
     print(f"   - gate schema: {schema}")
@@ -247,9 +255,13 @@ def build_decision_packet(
     sid = eval_result["scenario_id"]
     tier = eval_result.get("tier")
     workflow = eval_result.get("workflow")
-    inputs = scn.get("inputs", {}) if isinstance(scn.get("inputs"), dict) else {}
-    evidence = inputs.get("evidence", {}) if isinstance(inputs.get("evidence"), dict) else {}
-    policy = inputs.get("policy", {}) if isinstance(inputs.get("policy"), dict) else {}
+
+    inputs = scn.get("inputs", {}) if isinstance(
+        scn.get("inputs"), dict) else {}
+    evidence = inputs.get("evidence", {}) if isinstance(
+        inputs.get("evidence"), dict) else {}
+    policy = inputs.get("policy", {}) if isinstance(
+        inputs.get("policy"), dict) else {}
     requested_action = inputs.get("requested_action", {})
 
     final = eval_result["final_outcome"]
@@ -263,7 +275,8 @@ def build_decision_packet(
         approvals_required = [escalation_to or "Controller approver"]
         approval_status = "pending"
     else:  # HARD_STOP
-        approvals_required = [escalation_to or "2LoD Risk/Compliance + Policy owner"]
+        approvals_required = [
+            escalation_to or "2LoD Risk/Compliance + Policy owner"]
         approval_status = "blocked_pending_investigation"
 
     # action firewall placeholder
@@ -271,28 +284,51 @@ def build_decision_packet(
     action_firewall = {
         "requested_action": requested_action,
         "allowed": action_allowed,
-        "blocked_reason": None if action_allowed else ("requires_approval" if final == "ESCALATE" else "hard_stop"),
+        "blocked_reason": None
+        if action_allowed
+        else ("requires_approval" if final == "ESCALATE" else "hard_stop"),
         "notes": "Placeholder action firewall result (paper demo).",
     }
 
-    # short memo template
+    # ---- Decision memo formatting ----
+    def fmt_action(a):
+        if not a:
+            return "(not provided)"
+        if isinstance(a, dict):
+            t = a.get("type", "action")
+            parts = [f"type={t}"]
+            for k, v in a.items():
+                if k == "type":
+                    continue
+                parts.append(f"{k}={v}")
+            return ", ".join(parts)
+        return str(a)
+
     summary = inputs.get("summary") or scn.get("summary") or ""
     memo_bullets = [
-        f"Requested action: {requested_action if requested_action else '(not provided)'}",
+        f"Requested action: {fmt_action(requested_action)}",
         f"Tier/workflow: tier={tier}, workflow={workflow}",
         f"Evidence refs: {evidence.get('evidence_refs', [])}",
         f"Decision: {final} (reasons={eval_result['reason_codes']})",
     ]
+
+    missing = evidence.get("missing", [])
+    if final == "ESCALATE" and missing:
+        memo_bullets.append(f"Missing evidence items: {missing}")
+
+    conflict_notes = policy.get("conflict_notes")
+    if final == "HARD_STOP" and conflict_notes:
+        memo_bullets.append(f"Policy conflict notes: {conflict_notes}")
+
     if eval_result["required_questions"]:
-        memo_bullets.append(f"Required questions: {eval_result['required_questions']}")
+        memo_bullets.append(
+            f"Required questions: {eval_result['required_questions']}")
 
     packet = {
         "packet_version": "DP-0.1",
         "packet_id": f"PKT_{sid}",
         "run_id": run_id,
         "created_utc": utc_now_iso(),
-
-        # Snapshot: stable replay context
         "snapshot": {
             "scenario_id": sid,
             "tier": tier,
@@ -300,49 +336,34 @@ def build_decision_packet(
             "policy_version": policy_version,
             "permission_set_id": permission_set_id,
         },
-
-        # Evidence register: what was relied upon / what’s missing
         "evidence_register": {
             "count": evidence.get("count"),
             "complete": evidence.get("complete"),
             "evidence_refs": evidence.get("evidence_refs", []),
             "missing": evidence.get("missing", []),
         },
-
-        # Gate report: deterministic gate outcomes
         "gate_report": eval_result["gate_report"],
-
-        # Decision: final output + reason codes + required questions
         "decision": {
             "final_outcome": eval_result["final_outcome"],
             "reason_codes": eval_result["reason_codes"],
             "required_questions": eval_result["required_questions"],
         },
-
-        # Memo: human-readable “why”
         "decision_memo": {
             "summary": summary,
             "bullets": memo_bullets,
         },
-
-        # Approvals placeholder
         "approvals": {
             "status": approval_status,
             "required": approvals_required,
             "history": [],
         },
-
-        # Action firewall placeholder
         "action_firewall": action_firewall,
-
-        # Full scenario (for replay)
         "scenario": scn,
         "inputs_snapshot": inputs,
         "policy_snapshot": policy,
     }
 
     return packet
-
 
 def cmd_run(
     scenarios_path: Path,
@@ -361,7 +382,8 @@ def cmd_run(
 
     schema = detect_gate_schema(gate_cfg)
     if schema != "paper":
-        raise SystemExit("❌ trace run expects PAPER gate schema (policy_version/outcome/if).")
+        raise SystemExit(
+            "❌ trace run expects PAPER gate schema (policy_version/outcome/if).")
     validate_gate_config_paper(gate_cfg)
 
     ps = select_permission_set(perms_cfg, permission_set_id)
@@ -450,7 +472,8 @@ def cmd_test(
 
     schema = detect_gate_schema(gate_cfg)
     if schema != "paper":
-        raise SystemExit("❌ trace test expects PAPER gate schema (policy_version/outcome/if).")
+        raise SystemExit(
+            "❌ trace test expects PAPER gate schema (policy_version/outcome/if).")
     validate_gate_config_paper(gate_cfg)
 
     ps = select_permission_set(perms_cfg, permission_set_id)
@@ -478,7 +501,8 @@ def cmd_test(
     for scn in scenarios:
         sid = scn.get("scenario_id") or scn.get("id") or "UNKNOWN"
         expected_gate = scn.get("expected_gate") or scn.get("expected_outcome")
-        expected_reasons = scn.get("expected_reason_codes") or scn.get("expected_reasons")
+        expected_reasons = scn.get(
+            "expected_reason_codes") or scn.get("expected_reasons")
 
         eval_result = evaluate_scenario_paper(scn, gate_cfg, allowed)
 
@@ -523,14 +547,17 @@ def cmd_test(
     if failures:
         print(f"❌ TEST FAIL: {passed}/{total} passed; {len(failures)} failed")
         for f in failures:
-            print(f"   - {f['scenario_id']}: expected={f['expected_gate']} actual={f['actual_gate']}")
+            print(
+                f"   - {f['scenario_id']}: expected={f['expected_gate']} actual={f['actual_gate']}")
             if f["expected_reason_codes"] is not None:
-                print(f"     reasons expected={f['expected_reason_codes']} actual={f['actual_reason_codes']}")
+                print(
+                    f"     reasons expected={f['expected_reason_codes']} actual={f['actual_reason_codes']}")
             if f["missing_packet_keys"]:
                 print(f"     packet missing keys: {f['missing_packet_keys']}")
         raise SystemExit(1)
 
-    print(f"✅ TEST PASS: {passed}/{total} scenarios matched expected outputs + packet schema")
+    print(
+        f"✅ TEST PASS: {passed}/{total} scenarios matched expected outputs + packet schema")
 
 
 def cmd_pack(run_id: str, out_root: Path) -> None:
@@ -543,7 +570,8 @@ def cmd_pack(run_id: str, out_root: Path) -> None:
     if not summary_path.exists():
         raise SystemExit(f"❌ Run summary not found: {summary_path}")
 
-    packet_files = [p for p in sorted(packets_dir.glob("packet_*.json")) if p.name != "packet_bundle.json"]
+    packet_files = [p for p in sorted(packets_dir.glob(
+        "packet_*.json")) if p.name != "packet_bundle.json"]
     if not packet_files:
         raise SystemExit(f"❌ No packet_*.json files found in: {packets_dir}")
 
@@ -595,20 +623,25 @@ def main():
     p_val.add_argument("--gate", default="configs/gate_config.yaml")
     p_val.add_argument("--perms", default="configs/permission_sets.yaml")
 
-    p_run = sub.add_parser("run", help="Run scenario pack -> write decision packets (paper gates)")
-    p_run.add_argument("--scenarios", default="scenarios/scenario_pack_v0.jsonl")
+    p_run = sub.add_parser(
+        "run", help="Run scenario pack -> write decision packets (paper gates)")
+    p_run.add_argument(
+        "--scenarios", default="scenarios/scenario_pack_v0.jsonl")
     p_run.add_argument("--gate", default="configs/gate_config.yaml")
     p_run.add_argument("--perms", default="configs/permission_sets.yaml")
     p_run.add_argument("--permission-set", default="PS_CONTROLLERS_DEFAULT")
     p_run.add_argument("--out", default="out")
 
-    p_test = sub.add_parser("test", help="Regression test: expected_* + packet schema")
-    p_test.add_argument("--scenarios", default="scenarios/scenario_pack_v0.jsonl")
+    p_test = sub.add_parser(
+        "test", help="Regression test: expected_* + packet schema")
+    p_test.add_argument(
+        "--scenarios", default="scenarios/scenario_pack_v0.jsonl")
     p_test.add_argument("--gate", default="configs/gate_config.yaml")
     p_test.add_argument("--perms", default="configs/permission_sets.yaml")
     p_test.add_argument("--permission-set", default="PS_CONTROLLERS_DEFAULT")
 
-    p_pack = sub.add_parser("pack", help="Bundle packets + hashes for a run_id into one audit artifact")
+    p_pack = sub.add_parser(
+        "pack", help="Bundle packets + hashes for a run_id into one audit artifact")
     p_pack.add_argument("--run-id", required=True)
     p_pack.add_argument("--out", default="out")
 
